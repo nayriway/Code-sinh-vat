@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lập trình sinh vật</title>
+<style>
+:root{--bg:#e8eff0;--panel:#f6fafa;--ink:#12303a;--muted:#54727b;--line:#c4d6d9;--me:#1d6fa5;--food:#5da10f;--foe:#c4311f;--on:#d4ecf8;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0c1a1f;--panel:#12262d;--ink:#dff0f3;--muted:#85a8b1;--line:#25414a;--me:#5db8f0;--food:#9ad84a;--foe:#ff7a62;--on:#1b3d4a}}
+:root[data-theme="dark"]{--bg:#0c1a1f;--panel:#12262d;--ink:#dff0f3;--muted:#85a8b1;--line:#25414a;--me:#5db8f0;--food:#9ad84a;--foe:#ff7a62;--on:#1b3d4a}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:460px;margin:0 auto;padding:14px 14px 28px;display:flex;flex-direction:column;gap:12px}
+h1{margin:0;font-size:1.35rem}
+p.sub{margin:2px 0 0;color:var(--muted);font-size:.9rem}
+.arena{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+canvas{display:block;width:100%;aspect-ratio:1}
+.hud{display:flex;align-items:center;gap:12px;font-size:.9rem;color:var(--muted)}
+.hud b{color:var(--ink);font-variant-numeric:tabular-nums}
+.bar{flex:1;height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;width:100%;background:var(--food);transition:width .1s}
+#res{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:20px;text-align:center;background:color-mix(in srgb,var(--bg) 85%,transparent)}
+#res.show{display:flex}
+#res strong{font-size:1.2rem}
+#res span{color:var(--muted);font-size:.95rem}
+.rules{display:flex;flex-direction:column;gap:6px}
+.rule{display:grid;grid-template-columns:20px 1fr 1fr 34px 34px;gap:6px;align-items:center;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.rule.on{background:var(--on);border-color:var(--me)}
+.rule .n{color:var(--muted);font-size:.85rem;text-align:center}
+select,button{font:inherit;font-size:.9rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 4px;min-width:0}
+.rule button{padding:8px 0}
+.row{display:flex;gap:8px}
+.row button{flex:1;padding:12px 6px;font-weight:600}
+button.go{background:var(--me);color:var(--bg);border-color:var(--me)}
+button:disabled{opacity:.4}
+h2{margin:4px 0 0;font-size:1rem}
+.legend{font-size:.85rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Lập trình sinh vật</h1>
+    <p class="sub">Dạy sinh vật xanh sống sót 45 giây bằng các luật của bạn.</p>
+  </div>
+  <div class="arena">
+    <canvas id="c"></canvas>
+    <div id="res"><strong id="rt"></strong><span id="rd"></span></div>
+  </div>
+  <div class="hud">
+    <span>Năng lượng</span><div class="bar"><i id="hp"></i></div>
+    <span>Giờ <b id="tm">0</b>/45</span>
+    <span>Ăn <b id="ea">0</b></span>
+  </div>
+  <div class="row">
+    <button class="go" id="run">Chạy</button>
+    <button id="spd">Tốc độ x1</button>
+  </div>
+  <h2>Luật (luật trên cùng được ưu tiên)</h2>
+  <div class="rules" id="rules"></div>
+  <button id="add">Thêm luật</button>
+  <div class="legend">Chấm xanh lá là thức ăn, chấm đỏ là kẻ thù. Sinh vật thấy thức ăn trong vòng nét đứt và thấy kẻ thù khi lại gần.</div>
+</main>
+<script>
+const COND=[['food','Thấy thức ăn'],['foe','Thấy kẻ thù'],['low','Máu dưới 40%'],['any','Luôn luôn']];
+const ACT=[['toFood','Đi tới thức ăn'],['flee','Chạy khỏi kẻ thù'],['wander','Đi lung tung'],['rest','Đứng nghỉ']];
+const W=300, MAX=6, LIM=45;
+let rules=[{c:'foe',a:'flee'},{c:'any',a:'wander'}];
+try{ const s=JSON.parse(localStorage.getItem('creature-rules')); if(Array.isArray(s)&&s.length) rules=s }catch(e){}
+let sim=null, running=false, speed=1, last=0, acc=0, rows=[];
+const $=id=>document.getElementById(id), cv=$('c'), ctx=cv.getContext('2d');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const rp=()=>({x:20+Math.random()*260,y:20+Math.random()*260});
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+function save(){ try{ localStorage.setItem('creature-rules',JSON.stringify(rules)) }catch(e){} }
+function opts(list,v){ return list.map(([k,t])=>'<option value="'+k+'"'+(k===v?' selected':'')+'>'+t+'</option>').join('') }
+function build(){
+  const box=$('rules'); box.innerHTML=''; rows=[];
+  rules.forEach((r,i)=>{
+    const d=document.createElement('div'); d.className='rule';
+    d.innerHTML='<span class="n">'+(i+1)+'</span><select>'+opts(COND,r.c)+'</select><select>'+opts(ACT,r.a)+'</select><button title="Đưa lên">↑</button><button title="Xóa">✕</button>';
+    const [sc,sa]=d.querySelectorAll('select'), [up,del]=d.querySelectorAll('button');
+    sc.onchange=()=>{r.c=sc.value;save()}; sa.onchange=()=>{r.a=sa.value;save()};
+    up.onclick=()=>{ if(i>0){ [rules[i-1],rules[i]]=[rules[i],rules[i-1]]; save(); build() } };
+    del.onclick=()=>{ rules.splice(i,1); save(); build() };
+    box.appendChild(d); rows.push(d);
+  });
+  $('add').disabled=rules.length>=MAX;
+}
+$('add').onclick=()=>{ if(rules.length<MAX){ rules.push({c:'any',a:'wander'}); save(); build() } };
+
+function newSim(){
+  sim={t:0,eaten:0,hp:100,x:150,y:150,ang:0,inv:0,hitT:-99,active:-1,over:false,foods:[],
+       foes:[{x:40,y:40,a:1},{x:260,y:260,a:3}]};
+  while(sim.foods.length<5) sim.foods.push(rp());
+}
+function nearest(arr,r){ let b=null,bd=r; for(const o of arr){ const d=dist(sim,o); if(d<bd){bd=d;b=o} } return b }
+function toward(f,tx,ty){ f.ang=Math.atan2(ty-f.y,tx-f.x) }
+
+function step(dt){
+  const S=sim, food=nearest(S.foods,110), foe=nearest(S.foes,80);
+  const cond={food:!!food,foe:!!foe,low:S.hp<40,any:true};
+  let act='wander', idx=-1;
+  for(let i=0;i<rules.length;i++){
+    const r=rules[i];
+    if(!cond[r.c]) continue;
+    if(r.a==='toFood'&&!food) continue;
+    if(r.a==='flee'&&!foe) continue;
+    act=r.a; idx=i; break;
+  }
+  S.active=idx;
+  let drain=3;
+  if(act==='toFood') toward(S,food.x,food.y);
+  else if(act==='flee') toward(S,2*S.x-foe.x,2*S.y-foe.y);
+  else if(act==='wander') S.ang+=(Math.random()-.5)*.15;
+  if(act==='rest') drain=1.5;
+  else{
+    S.x+=Math.cos(S.ang)*60*dt; S.y+=Math.sin(S.ang)*60*dt;
+    if(S.x<8||S.x>W-8||S.y<8||S.y>W-8){
+      S.x=Math.min(W-8,Math.max(8,S.x)); S.y=Math.min(W-8,Math.max(8,S.y));
+      if(act==='wander') toward(S,150,150);
+    }
+  }
+  S.hp-=drain*dt;
+  for(let i=0;i<S.foods.length;i++) if(dist(S,S.foods[i])<12){
+    S.hp=Math.min(100,S.hp+25); S.eaten++; S.foods[i]=rp();
+  }
+  for(const f of S.foes){
+    const chase=dist(f,S)<85;
+    if(chase) f.a=Math.atan2(S.y-f.y,S.x-f.x); else f.a+=(Math.random()-.5)*.15;
+    const sp=chase?48:30;
+    f.x+=Math.cos(f.a)*sp*dt; f.y+=Math.sin(f.a)*sp*dt;
+    if(f.x<8||f.x>W-8||f.y<8||f.y>W-8){
+      f.x=Math.min(W-8,Math.max(8,f.x)); f.y=Math.min(W-8,Math.max(8,f.y));
+      f.a=Math.atan2(150-f.y,150-f.x);
+    }
+    if(dist(f,S)<14&&S.inv<=0){ S.hp-=25; S.inv=1; S.hitT=S.t }
+  }
+  S.inv-=dt; S.t+=dt;
+  if(S.hp<=0) finish(false);
+  else if(S.t>=LIM) finish(true);
+}
+
+function finish(win){
+  const S=sim; S.over=true; running=false; $('run').textContent='Chạy lại';
+  const n=Math.round(S.t);
+  if(win){ $('rt').textContent='Sống sót!'; $('rd').textContent='Bạn sống đủ '+LIM+' giây và ăn '+S.eaten+' thức ăn.'; }
+  else if(S.t-S.hitT<4){ $('rt').textContent='Bị kẻ thù hạ gục sau '+n+' giây'; $('rd').textContent='Đặt luật chạy khỏi kẻ thù lên trên cùng.'; }
+  else{ $('rt').textContent='Chết đói sau '+n+' giây'; $('rd').textContent='Thêm luật đi tới thức ăn, hoặc đứng nghỉ khi máu thấp.'; }
+  $('res').classList.add('show');
+}
+
+function hud(){
+  const S=sim; if(!S) return;
+  $('hp').style.width=Math.max(0,S.hp)+'%';
+  $('tm').textContent=Math.floor(S.t); $('ea').textContent=S.eaten;
+  rows.forEach((r,i)=>r.classList.toggle('on',running&&i===S.active));
+}
+
+function draw(){
+  const d=window.devicePixelRatio||1, s=cv.clientWidth;
+  if(cv.width!==Math.round(s*d)){ cv.width=cv.height=Math.round(s*d) }
+  const k=cv.width/W;
+  ctx.setTransform(k,0,0,k,0,0); ctx.clearRect(0,0,W,W);
+  if(!sim) return;
+  const S=sim;
+  ctx.strokeStyle=css('--line'); ctx.setLineDash([4,4]); ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(S.x,S.y,110,0,7); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle=css('--food');
+  for(const f of S.foods){ ctx.beginPath(); ctx.arc(f.x,f.y,4,0,7); ctx.fill() }
+  ctx.fillStyle=css('--foe');
+  for(const f of S.foes){ ctx.beginPath(); ctx.arc(f.x,f.y,7,0,7); ctx.fill() }
+  ctx.globalAlpha=S.inv>0&&Math.floor(S.t*10)%2?.4:1;
+  ctx.fillStyle=css('--me'); ctx.beginPath(); ctx.arc(S.x,S.y,8,0,7); ctx.fill();
+  ctx.strokeStyle=css('--panel'); ctx.lineWidth=2; ctx.beginPath();
+  ctx.moveTo(S.x,S.y); ctx.lineTo(S.x+Math.cos(S.ang)*8,S.y+Math.sin(S.ang)*8); ctx.stroke();
+  ctx.globalAlpha=1;
+}
+
+function frame(ts){
+  const dt=Math.min(.1,(ts-last)/1000); last=ts;
+  if(running&&sim&&!sim.over){
+    acc+=dt*speed;
+    while(acc>=1/60&&!sim.over){ step(1/60); acc-=1/60 }
+  }
+  hud(); draw(); requestAnimationFrame(frame);
+}
+
+$('run').onclick=()=>{ newSim(); acc=0; running=true; $('res').classList.remove('show'); $('run').textContent='Chạy lại' };
+$('spd').onclick=()=>{ speed=speed===1?2:speed===2?4:1; $('spd').textContent='Tốc độ x'+speed };
+
+build(); newSim(); requestAnimationFrame(t=>{ last=t; frame(t) });
+</script>
+</body>
+</html>
